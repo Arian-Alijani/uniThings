@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'حالت اجرا'
+        description: 'Run mode'
         required: false
         default: 'collect'
         type: choice
@@ -15,41 +15,41 @@ on:
           - fresh
           - test
       temp_channel:
-        description: 'نام کانال موقت (بدون @)'
+        description: 'Temporary channel username (without @)'
         required: false
         type: string
       temp_limit:
-        description: 'محدودیت تعداد برای کانال موقت'
+        description: 'Limit for temporary channel'
         required: false
         default: '5'
         type: number
       global_limit_override:
-        description: 'محدودیت سراسری (0 = بدون تغییر)'
+        description: 'Global limit override (0 = use per-channel limit)'
         required: false
         default: 0
         type: number
       protocol_filter:
-        description: 'پروتکل‌های مجاز (مثال: vmess,vless,trojan)'
+        description: 'Allowed protocols (comma separated, e.g. vmess,vless)'
         required: false
         default: ''
         type: string
       max_total_configs:
-        description: 'حداکثر تعداد کل کانفیگ‌ها (0 = نامحدود)'
+        description: 'Max total configs in subscription (0 = unlimited)'
         required: false
         default: 300
         type: number
       live_test:
-        description: 'تست زنده بودن کانفیگ‌ها؟'
+        description: 'Perform live connection test?'
         required: false
         default: false
         type: boolean
       commit_changes:
-        description: 'ذخیره تغییرات در ریپو؟'
+        description: 'Commit changes to repository?'
         required: false
         default: true
         type: boolean
       verbose:
-        description: 'لاگ کامل؟'
+        description: 'Verbose logging?'
         required: false
         default: false
         type: boolean
@@ -60,7 +60,6 @@ jobs:
     permissions:
       contents: write
 
-    # 👇 env در سطح job تعریف می‌شود تا در تمام مراحل در دسترس باشد
     env:
       MODE: ${{ inputs.mode || 'collect' }}
       TEMP_CHANNEL: ${{ inputs.temp_channel || '' }}
