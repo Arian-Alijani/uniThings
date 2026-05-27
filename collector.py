@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
-# ========== تنظیمات از محیط ==========
+# ========== Environment variables ==========
 MODE = os.getenv("MODE", "collect")
 TEMP_CHANNEL = os.getenv("TEMP_CHANNEL", "").strip()
 TEMP_LIMIT = int(os.getenv("TEMP_LIMIT", 5))
@@ -16,13 +16,13 @@ LIVE_TEST = os.getenv("LIVE_TEST", "false").lower() == "true"
 VERBOSE = os.getenv("VERBOSE", "false").lower() == "true"
 COMMIT_CHANGES = os.getenv("COMMIT_CHANGES", "true").lower() == "true"
 
-# فایل‌های دائمی
+# File paths
 CHANNELS_FILE = "channels.json"
 DB_FILE = "collected.json"
 SUBSCRIPTION_FILE = "subscription.txt"
 SCANS_DIR = "scans"
 
-# ========== توابع کمکی ==========
+# ========== Helper functions ==========
 def log(msg, level="INFO"):
     if VERBOSE or level != "DEBUG":
         print(f"[{level}] {msg}")
@@ -39,22 +39,16 @@ def save_json(filepath, data):
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-# ========== استخراج جامع تمام پروتکل‌ها ==========
-# یک regex واحد که هر لینکی با این پیشوندها را تا انتهای بخش بدون فاصله می‌گیرد
+# ========== Universal config extraction ==========
 PROTOCOL_PATTERN = re.compile(
     r'(vmess://\S+|vless://\S+|trojan://\S+|ss://\S+|hysteria2?://\S+|tuic://\S+)',
     re.IGNORECASE
 )
 
 def extract_configs(text):
-    """
-    همهٔ کانفیگ‌های معتبر را حتی اگر در میان متن چسبیده باشند، بیرون می‌کشد.
-    پس از یافتن، علائم نگارشی انتهایی را حذف می‌کند.
-    """
     configs = set()
     matches = PROTOCOL_PATTERN.findall(text)
     for match in matches:
-        # حذف علائم نگارشی چسبیده به انتها (مثلاً نقطه، کاما، پرانتز و ...)
         clean = match.rstrip('.,;:!?؟،؛"\'()[]{}<>')
         if clean:
             configs.add(clean)
@@ -67,7 +61,7 @@ def fetch_channel_posts(username):
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
     except Exception as e:
-        log(f"خطا در دریافت کانال {username}: {e}", "ERROR")
+        log(f"Error fetching channel {username}: {e}", "ERROR")
         return []
     soup = BeautifulSoup(resp.text, "html.parser")
     messages = soup.select(".tgme_widget_message_wrap")
@@ -134,41 +128,39 @@ def filter_by_protocol(configs, allowed):
             filtered.append(c)
     return filtered
 
-# ========== ساخت فایل‌های پیش‌فرض در صورت عدم وجود ==========
+# ========== Create default files if missing ==========
 if not os.path.exists(CHANNELS_FILE):
-    default_channels = [
-        {"username": "free_v2ray_configs", "limit": 10}
-    ]
+    default_channels = [{"username": "free_v2ray_configs", "limit": 10}]
     save_json(CHANNELS_FILE, default_channels)
-    log(f"⚠️ فایل {CHANNELS_FILE} وجود نداشت. یک نمونه با کانال پیش‌فرض ساخته شد. لطفاً آن را ویرایش کنید.")
+    log(f"Created default {CHANNELS_FILE}. Please edit it.", "WARN")
 if not os.path.exists(DB_FILE):
     save_json(DB_FILE, {})
-    log(f"⚠️ فایل {DB_FILE} وجود نداشت. یک دیتابیس خالی ایجاد شد.")
+    log(f"Created empty {DB_FILE}.", "WARN")
 
-# ========== بارگذاری کانال‌ها ==========
+# ========== Load channels ==========
 channels = load_json(CHANNELS_FILE, [])
 if TEMP_CHANNEL:
     channels.append({"username": TEMP_CHANNEL, "limit": TEMP_LIMIT})
-    log(f"کانال موقت اضافه شد: {TEMP_CHANNEL} با محدودیت {TEMP_LIMIT}")
+    log(f"Temporary channel added: {TEMP_CHANNEL} (limit={TEMP_LIMIT})")
 
 if not channels:
-    log("هیچ کانالی تعریف نشده است.", "ERROR")
+    log("No channels defined. Exiting.", "ERROR")
     sys.exit(1)
 
-# ========== بارگذاری دیتابیس ==========
+# ========== Load database ==========
 if MODE == "fresh":
     db = {}
-    log("حالت fresh: دیتابیس قبلی نادیده گرفته شد.")
+    log("Fresh mode: ignoring previous database.")
 else:
     db = load_json(DB_FILE, {})
 
-# ========== جمع‌آوری کانفیگ‌ها ==========
+# ========== Collect configs ==========
 new_configs_added = []
 
 for ch in channels:
     username = ch["username"]
     limit = GLOBAL_LIMIT_OVERRIDE if GLOBAL_LIMIT_OVERRIDE > 0 else ch.get("limit", 10)
-    log(f"پردازش کانال {username} (limit={limit})")
+    log(f"Processing channel {username} (limit={limit})")
     posts = fetch_channel_posts(username)
     collected = []
     for text in posts:
@@ -180,60 +172,58 @@ for ch in channels:
                 collected.append(cfg)
             if len(collected) >= limit:
                 break
-    # اعمال فیلتر پروتکل (اگر فعال باشد)
     collected = filter_by_protocol(collected, PROTOCOL_FILTER)
     now = int(time.time())
     for cfg in collected:
         if cfg not in db:
             db[cfg] = now
             new_configs_added.append(cfg)
-            log(f"  کانفیگ جدید: {cfg[:60]}...")
+            log(f"  New config: {cfg[:60]}...")
 
-log(f"تعداد کانفیگ‌های جدید این اجرا: {len(new_configs_added)}")
+log(f"Total new configs this run: {len(new_configs_added)}")
 
-# ========== محدودیت تعدادی ==========
+# ========== Enforce total limit ==========
 if MAX_TOTAL_CONFIGS > 0 and len(db) > MAX_TOTAL_CONFIGS:
     sorted_items = sorted(db.items(), key=lambda x: x[1])
     db = dict(sorted_items[-MAX_TOTAL_CONFIGS:])
-    log(f"حذف کانفیگ‌های قدیمی. تعداد نهایی: {len(db)}")
+    log(f"Removed oldest configs. Total now: {len(db)}")
 
-# ========== تست زنده بودن ==========
+# ========== Optional live test ==========
 valid_configs = list(db.keys())
 if LIVE_TEST:
-    log("انجام تست زنده بودن کانفیگ‌ها...")
-    alive = []
-    dead = 0
+    log("Running live connection tests...")
+    alive, dead = [], 0
     for cfg in valid_configs:
         if test_config_live(cfg):
             alive.append(cfg)
         else:
             dead += 1
-    log(f"تست زنده: {len(alive)} فعال, {dead} مرده")
+    log(f"Live test results: {len(alive)} alive, {dead} dead")
     valid_configs = alive
 
-# ========== تولید فایل اشتراک ==========
+# ========== Build subscription ==========
 if valid_configs:
     plain = "\n".join(valid_configs)
     b64 = base64.b64encode(plain.encode()).decode()
     with open(SUBSCRIPTION_FILE, "w", encoding="utf-8") as f:
         f.write(b64)
-    log(f"فایل اشتراک با {len(valid_configs)} کانفیگ ساخته شد.")
+    log(f"Subscription created with {len(valid_configs)} configs.")
 else:
     with open(SUBSCRIPTION_FILE, "w", encoding="utf-8") as f:
         f.write("")
-    log("هیچ کانفیگ معتبری برای اشتراک وجود ندارد.", "WARN")
+    log("No valid configs for subscription.", "WARN")
 
-# ========== ذخیره دیتابیس ==========
+# ========== Save database ==========
 if MODE != "test":
     save_json(DB_FILE, db)
 else:
-    log("حالت test: دیتابیس ذخیره نشد.")
+    log("Test mode: database not saved.")
 
-# ========== ذخیره فایل اسکن جدید ==========
+# ========== Save scan snapshot ==========
 if new_configs_added and MODE != "test":
     os.makedirs(SCANS_DIR, exist_ok=True)
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     scan_file = os.path.join(SCANS_DIR, f"scan_{timestamp_str}.txt")
     with open(scan_file, "w", encoding="utf-8") as f:
         f.write("\n".join(new_configs_added))
-    log(f"فایل اسکن جدید ذخیره شد: {scan_file}")
+    log(f"Scan saved: {scan_file}")
