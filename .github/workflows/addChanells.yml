@@ -43,7 +43,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install requests and beautifulsoup4
+      - name: Install dependencies
         run: pip install requests beautifulsoup4
 
       - name: Extract usernames and update channels.json
@@ -57,56 +57,90 @@ jobs:
           limit = int(os.environ['LIMIT'])
           overwrite = os.environ['OVERWRITE_EXISTING'].lower() == 'true'
 
-          # ----- helper to fetch last post from a channel -----
+          # ----- helper to fetch last post text -----
           def fetch_last_post_text(username):
               url = f"https://t.me/s/{username}"
               headers = {"User-Agent": "Mozilla/5.0"}
+              print(f"[DEBUG] Fetching {url}")
               try:
                   resp = requests.get(url, headers=headers, timeout=15)
                   resp.raise_for_status()
                   soup = BeautifulSoup(resp.text, "html.parser")
-                  # first message wrap
                   msg = soup.select_one(".tgme_widget_message_wrap")
                   if msg:
                       text_div = msg.select_one(".tgme_widget_message_text")
                       if text_div:
-                          return text_div.get_text(separator="\n")
+                          txt = text_div.get_text(separator="\n")
+                          print(f"[DEBUG] Last post text (first 300 chars): {txt[:300]}")
+                          return txt
+                  print("[DEBUG] No message found on page.")
                   return ""
               except Exception as e:
-                  print(f"Error fetching last post from {username}: {e}")
+                  print(f"[ERROR] Could not fetch channel {username}: {e}")
                   return ""
 
-          # ----- combine all text sources -----
+          # ----- collect all text -----
           all_text = raw_text
           if source_channel:
               post_text = fetch_last_post_text(source_channel)
               if post_text:
                   all_text += "\n" + post_text
-                  print(f"Fetched last post from {source_channel}")
+                  print(f"[INFO] Fetched last post from {source_channel}")
+              else:
+                  print(f"[WARN] No text retrieved from {source_channel}")
 
-          # ----- extract usernames (with or without @, t.me/, or after - or _ ) -----
-          # Match any Telegram username: starting with letter, 5-32 chars
-          # It can be preceded by @, t.me/, telegram.me/, or even - or _
-          # The regex captures the username part (without @)
+          if not all_text.strip():
+              print("[ERROR] No input text at all.")
+              exit(1)
+
+          print(f"[DEBUG] Total combined text length: {len(all_text)}")
+
+          # ----- robust username extraction -----
+          candidates = set()
+
+          # 1) classic regex (handles @, t.me/, - , _)
           pattern = r'(?:@|(?:https?://)?t\.me/|telegram\.me/|[_-])\s*([a-zA-Z][a-zA-Z0-9_]{4,31})'
           matches = re.findall(pattern, all_text)
+          for m in matches:
+              candidates.add(m.strip())
 
-          # Also support plain usernames without any prefix (if they look like valid usernames)
+          # 2) plain valid usernames (word boundary)
           plain_pattern = r'\b([a-zA-Z][a-zA-Z0-9_]{4,31})\b'
           plain_matches = re.findall(plain_pattern, all_text)
+          for m in plain_matches:
+              candidates.add(m)
 
-          # Combine and deduplicate
-          all_usernames = set()
-          for m in matches + plain_matches:
-              m = m.strip()
-              if len(m) >= 5 and m[0].isalpha():
-                  all_usernames.add(m)
+          # 3) fallback: line-by-line extraction
+          # If a line starts with @, -, _ or even a word that looks like a username
+          for line in all_text.splitlines():
+              line = line.strip()
+              # remove leading @ or - or _
+              if line.startswith('@'):
+                  line = line[1:]
+              elif line.startswith('-') or line.startswith('_'):
+                  line = line[1:]
+              # also handle t.me/username in the line
+              if 't.me/' in line:
+                  # extract after t.me/
+                  parts = line.split('t.me/')
+                  for part in parts[1:]:
+                      part = part.split()[0].split('#')[0].split('?')[0].rstrip('/')
+                      if re.match(r'^[a-zA-Z][a-zA-Z0-9_]{4,31}$', part):
+                          candidates.add(part)
+              # now check if the remaining word is a valid username
+              word = line.split()[0] if line else ''
+              if re.match(r'^[a-zA-Z][a-zA-Z0-9_]{4,31}$', word):
+                  candidates.add(word)
 
-          if not all_usernames:
-              print("No valid usernames found.")
+          # filter only valid usernames
+          valid_usernames = {c for c in candidates if re.match(r'^[a-zA-Z][a-zA-Z0-9_]{4,31}$', c)}
+
+          print(f"[DEBUG] Extracted candidates: {sorted(candidates)}")
+          print(f"[DEBUG] Valid usernames after filtering: {sorted(valid_usernames)}")
+
+          if not valid_usernames:
+              print("[ERROR] No valid Telegram usernames found in the provided text.")
               exit(0)
-
-          print(f"Extracted usernames: {', '.join(sorted(all_usernames))}")
 
           # ----- load existing channels.json -----
           channels_file = 'channels.json'
@@ -119,24 +153,24 @@ jobs:
           existing_map = {ch['username']: ch for ch in channels}
           added = updated = 0
 
-          for username in all_usernames:
+          for username in valid_usernames:
               if username in existing_map:
                   if overwrite:
                       existing_map[username]['limit'] = limit
                       updated += 1
-                      print(f"Updated limit for {username} to {limit}")
+                      print(f"[INFO] Updated limit for {username} to {limit}")
                   else:
-                      print(f"Skipped {username} (already exists)")
+                      print(f"[INFO] Skipped {username} (already exists)")
               else:
                   channels.append({"username": username, "limit": limit})
                   existing_map[username] = True
                   added += 1
-                  print(f"Added {username} with limit {limit}")
+                  print(f"[INFO] Added {username} with limit {limit}")
 
           with open(channels_file, 'w', encoding='utf-8') as f:
               json.dump(channels, f, indent=2, ensure_ascii=False)
 
-          print(f"Summary: {added} added, {updated} updated.")
+          print(f"[RESULT] {added} added, {updated} updated.")
 
       - name: Commit and push changes
         run: |
