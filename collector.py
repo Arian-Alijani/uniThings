@@ -39,32 +39,25 @@ def save_json(filepath, data):
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-# ========== استخراج هوشمند کانفیگ ==========
-# پیشوندهای پشتیبانی‌شده
-KNOWN_PROTOCOLS = [
-    "vmess://", "vless://", "trojan://", "ss://",
-    "hysteria://", "hysteria2://", "tuic://"
-]
+# ========== استخراج جامع تمام پروتکل‌ها ==========
+# یک regex واحد که هر لینکی با این پیشوندها را تا انتهای بخش بدون فاصله می‌گیرد
+PROTOCOL_PATTERN = re.compile(
+    r'(vmess://\S+|vless://\S+|trojan://\S+|ss://\S+|hysteria2?://\S+|tuic://\S+)',
+    re.IGNORECASE
+)
 
 def extract_configs(text):
     """
-    همهٔ کانفیگ‌های معتبر را از متن بیرون می‌کشد.
-    روش کار: جدا کردن بر اساس فضای خالی (whitespace)
-    و سپس تشخیص کلماتی که با یکی از پروتکل‌ها شروع می‌شوند.
+    همهٔ کانفیگ‌های معتبر را حتی اگر در میان متن چسبیده باشند، بیرون می‌کشد.
+    پس از یافتن، علائم نگارشی انتهایی را حذف می‌کند.
     """
     configs = set()
-    # جدا کردن بر اساس هر نوع فضای خالی (فاصله، تب، خط جدید)
-    tokens = text.split()
-    for token in tokens:
-        token_lower = token.lower()
-        for prefix in KNOWN_PROTOCOLS:
-            if token_lower.startswith(prefix):
-                # پاکسازی علائم نگارشی چسبیده به انتها
-                # (مثلاً لینکی که در پرانتز یا گیومه قرار گرفته)
-                clean = token.rstrip('.,;:!?؟،؛"\'()[]{}<>')
-                if clean:
-                    configs.add(clean)
-                break  # یک توکن نمی‌تواند دو پروتکل داشته باشد
+    matches = PROTOCOL_PATTERN.findall(text)
+    for match in matches:
+        # حذف علائم نگارشی چسبیده به انتها (مثلاً نقطه، کاما، پرانتز و ...)
+        clean = match.rstrip('.,;:!?؟،؛"\'()[]{}<>')
+        if clean:
+            configs.add(clean)
     return list(configs)
 
 def fetch_channel_posts(username):
@@ -187,6 +180,7 @@ for ch in channels:
                 collected.append(cfg)
             if len(collected) >= limit:
                 break
+    # اعمال فیلتر پروتکل (اگر فعال باشد)
     collected = filter_by_protocol(collected, PROTOCOL_FILTER)
     now = int(time.time())
     for cfg in collected:
