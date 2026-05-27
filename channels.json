@@ -1,5 +1,30 @@
 [
-  { "username": "FreeConfigForYou", "limit": 50 },
-  { "username": "V2rayng_Fast", "limit": 50 },
-  { "username": "V2rayAlpha--5", "limit": 50 }
+  {
+    "username": "FreeConfigForYou",
+    "limit": 50
+  },
+  {
+    "username": "V2rayng_Fast",
+    "limit": 50
+  },
+  {
+    "username": "V2rayAlpha--5",
+    "limit": 50
+  },
+  {
+    "username": "V2All",
+    "limit": 50
+  },
+  {
+    "username": "SOSkeyNET",
+    "limit": 50
+  },
+  {
+    "username": "APPXA",
+    "limit": 50
+  },
+  {
+    "username": "v2ray_dalghak",
+    "limit": 50
+  }
 ]
