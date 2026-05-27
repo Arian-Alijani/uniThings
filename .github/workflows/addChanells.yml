@@ -1,0 +1,111 @@
+name: Add Channels from Text
+
+on:
+  workflow_dispatch:
+    inputs:
+      raw_text:
+        description: 'متن حاوی یوزرنیم کانال‌ها (می‌تواند با @ یا t.me/ باشد)'
+        required: true
+        type: string
+      limit:
+        description: 'تعداد کانفیگ برای هر کانال جدید'
+        required: false
+        default: '10'
+        type: number
+      overwrite_existing:
+        description: 'در صورت وجود کانال، محدودیت آن به‌روز شود؟'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  add-channels:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    env:
+      RAW_TEXT: ${{ inputs.raw_text }}
+      LIMIT: ${{ inputs.limit || 10 }}
+      OVERWRITE_EXISTING: ${{ inputs.overwrite_existing || false }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Extract and update channels
+        shell: python
+        run: |
+          import os, json, re, sys
+
+          raw_text = os.environ['RAW_TEXT']
+          limit = int(os.environ['LIMIT'])
+          overwrite = os.environ['OVERWRITE_EXISTING'].lower() == 'true'
+
+          # استخراج یوزرنیم‌ها با الگوی @ و t.me/
+          pattern = r'(?:@|(?:https?://)?t\.me/|telegram\.me/)([a-zA-Z][a-zA-Z0-9_]{4,31})'
+          matches = re.findall(pattern, raw_text)
+
+          # پاک‌سازی و حذف موارد تکراری
+          usernames = []
+          seen = set()
+          for m in matches:
+              m = m.strip()
+              if m not in seen:
+                  seen.add(m)
+                  usernames.append(m)
+
+          if not usernames:
+              print("⚠️ هیچ یوزرنیم معتبری یافت نشد.")
+              sys.exit(0)
+
+          print(f"✅ یوزرنیم‌های استخراج شده: {', '.join(usernames)}")
+
+          # بارگذاری channels.json
+          channels_file = 'channels.json'
+          if os.path.exists(channels_file):
+              with open(channels_file, 'r', encoding='utf-8') as f:
+                  channels = json.load(f)
+          else:
+              channels = []
+
+          # نگاشت یوزرنیم‌های موجود برای بررسی سریع
+          existing_map = {ch['username']: ch for ch in channels}
+
+          added = 0
+          updated = 0
+
+          for username in usernames:
+              if username in existing_map:
+                  if overwrite:
+                      existing_map[username]['limit'] = limit
+                      updated += 1
+                      print(f"🔄 محدودیت کانال {username} به {limit} تغییر کرد.")
+                  else:
+                      print(f"⏭️ کانال {username} از قبل وجود دارد، نادیده گرفته شد.")
+              else:
+                  channels.append({
+                      "username": username,
+                      "limit": limit
+                  })
+                  existing_map[username] = True
+                  added += 1
+                  print(f"➕ کانال {username} با محدودیت {limit} اضافه شد.")
+
+          # ذخیره فایل
+          with open(channels_file, 'w', encoding='utf-8') as f:
+              json.dump(channels, f, indent=2, ensure_ascii=False)
+
+          print(f"📊 نتیجه: {added} کانال جدید اضافه شد، {updated} کانال به‌روزرسانی شد.")
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add channels.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "➕ Add/update channels from raw text" && git push)
