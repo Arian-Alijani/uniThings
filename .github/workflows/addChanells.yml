@@ -1,19 +1,23 @@
-name: Add Channels from Text
+name: Add Channels from Text or Last Post
 
 on:
   workflow_dispatch:
     inputs:
       raw_text:
-        description: 'متن حاوی یوزرنیم کانال‌ها (می‌تواند با @ یا t.me/ باشد)'
-        required: true
+        description: 'Raw text containing channel usernames (with @, t.me/, etc.)'
+        required: false
+        type: string
+      source_channel:
+        description: 'Fetch last post of this channel and extract usernames from it'
+        required: false
         type: string
       limit:
-        description: 'تعداد کانفیگ برای هر کانال جدید'
+        description: 'Number of configs to extract from each added channel'
         required: false
         default: '10'
         type: number
       overwrite_existing:
-        description: 'در صورت وجود کانال، محدودیت آن به‌روز شود؟'
+        description: 'Update limit if channel already exists?'
         required: false
         default: false
         type: boolean
@@ -25,7 +29,8 @@ jobs:
       contents: write
 
     env:
-      RAW_TEXT: ${{ inputs.raw_text }}
+      RAW_TEXT: ${{ inputs.raw_text || '' }}
+      SOURCE_CHANNEL: ${{ inputs.source_channel || '' }}
       LIMIT: ${{ inputs.limit || 10 }}
       OVERWRITE_EXISTING: ${{ inputs.overwrite_existing || false }}
 
@@ -38,35 +43,72 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Extract and update channels
+      - name: Install requests and beautifulsoup4
+        run: pip install requests beautifulsoup4
+
+      - name: Extract usernames and update channels.json
         shell: python
         run: |
-          import os, json, re, sys
+          import os, json, re, requests
+          from bs4 import BeautifulSoup
 
-          raw_text = os.environ['RAW_TEXT']
+          raw_text = os.environ.get('RAW_TEXT', '')
+          source_channel = os.environ.get('SOURCE_CHANNEL', '')
           limit = int(os.environ['LIMIT'])
           overwrite = os.environ['OVERWRITE_EXISTING'].lower() == 'true'
 
-          # استخراج یوزرنیم‌ها با الگوی @ و t.me/
-          pattern = r'(?:@|(?:https?://)?t\.me/|telegram\.me/)([a-zA-Z][a-zA-Z0-9_]{4,31})'
-          matches = re.findall(pattern, raw_text)
+          # ----- helper to fetch last post from a channel -----
+          def fetch_last_post_text(username):
+              url = f"https://t.me/s/{username}"
+              headers = {"User-Agent": "Mozilla/5.0"}
+              try:
+                  resp = requests.get(url, headers=headers, timeout=15)
+                  resp.raise_for_status()
+                  soup = BeautifulSoup(resp.text, "html.parser")
+                  # first message wrap
+                  msg = soup.select_one(".tgme_widget_message_wrap")
+                  if msg:
+                      text_div = msg.select_one(".tgme_widget_message_text")
+                      if text_div:
+                          return text_div.get_text(separator="\n")
+                  return ""
+              except Exception as e:
+                  print(f"Error fetching last post from {username}: {e}")
+                  return ""
 
-          # پاک‌سازی و حذف موارد تکراری
-          usernames = []
-          seen = set()
-          for m in matches:
+          # ----- combine all text sources -----
+          all_text = raw_text
+          if source_channel:
+              post_text = fetch_last_post_text(source_channel)
+              if post_text:
+                  all_text += "\n" + post_text
+                  print(f"Fetched last post from {source_channel}")
+
+          # ----- extract usernames (with or without @, t.me/, or after - or _ ) -----
+          # Match any Telegram username: starting with letter, 5-32 chars
+          # It can be preceded by @, t.me/, telegram.me/, or even - or _
+          # The regex captures the username part (without @)
+          pattern = r'(?:@|(?:https?://)?t\.me/|telegram\.me/|[_-])\s*([a-zA-Z][a-zA-Z0-9_]{4,31})'
+          matches = re.findall(pattern, all_text)
+
+          # Also support plain usernames without any prefix (if they look like valid usernames)
+          plain_pattern = r'\b([a-zA-Z][a-zA-Z0-9_]{4,31})\b'
+          plain_matches = re.findall(plain_pattern, all_text)
+
+          # Combine and deduplicate
+          all_usernames = set()
+          for m in matches + plain_matches:
               m = m.strip()
-              if m not in seen:
-                  seen.add(m)
-                  usernames.append(m)
+              if len(m) >= 5 and m[0].isalpha():
+                  all_usernames.add(m)
 
-          if not usernames:
-              print("⚠️ هیچ یوزرنیم معتبری یافت نشد.")
-              sys.exit(0)
+          if not all_usernames:
+              print("No valid usernames found.")
+              exit(0)
 
-          print(f"✅ یوزرنیم‌های استخراج شده: {', '.join(usernames)}")
+          print(f"Extracted usernames: {', '.join(sorted(all_usernames))}")
 
-          # بارگذاری channels.json
+          # ----- load existing channels.json -----
           channels_file = 'channels.json'
           if os.path.exists(channels_file):
               with open(channels_file, 'r', encoding='utf-8') as f:
@@ -74,38 +116,31 @@ jobs:
           else:
               channels = []
 
-          # نگاشت یوزرنیم‌های موجود برای بررسی سریع
           existing_map = {ch['username']: ch for ch in channels}
+          added = updated = 0
 
-          added = 0
-          updated = 0
-
-          for username in usernames:
+          for username in all_usernames:
               if username in existing_map:
                   if overwrite:
                       existing_map[username]['limit'] = limit
                       updated += 1
-                      print(f"🔄 محدودیت کانال {username} به {limit} تغییر کرد.")
+                      print(f"Updated limit for {username} to {limit}")
                   else:
-                      print(f"⏭️ کانال {username} از قبل وجود دارد، نادیده گرفته شد.")
+                      print(f"Skipped {username} (already exists)")
               else:
-                  channels.append({
-                      "username": username,
-                      "limit": limit
-                  })
+                  channels.append({"username": username, "limit": limit})
                   existing_map[username] = True
                   added += 1
-                  print(f"➕ کانال {username} با محدودیت {limit} اضافه شد.")
+                  print(f"Added {username} with limit {limit}")
 
-          # ذخیره فایل
           with open(channels_file, 'w', encoding='utf-8') as f:
               json.dump(channels, f, indent=2, ensure_ascii=False)
 
-          print(f"📊 نتیجه: {added} کانال جدید اضافه شد، {updated} کانال به‌روزرسانی شد.")
+          print(f"Summary: {added} added, {updated} updated.")
 
       - name: Commit and push changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add channels.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "➕ Add/update channels from raw text" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "➕ Add/update channels" && git push)
