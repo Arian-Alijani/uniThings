@@ -1,0 +1,94 @@
+name: Collect V2Ray Configs
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # هر ساعت یکبار
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'حالت اجرا'
+        required: false
+        default: 'collect'
+        type: choice
+        options:
+          - collect
+          - fresh
+          - test
+      temp_channel:
+        description: 'نام کانال موقت (بدون @)'
+        required: false
+        type: string
+      temp_limit:
+        description: 'محدودیت تعداد برای کانال موقت'
+        required: false
+        default: '5'
+        type: number
+      global_limit_override:
+        description: 'محدودیت سراسری (0 = بدون تغییر)'
+        required: false
+        default: 0
+        type: number
+      protocol_filter:
+        description: 'پروتکل‌های مجاز (مثال: vmess,vless,trojan)'
+        required: false
+        default: ''
+        type: string
+      max_total_configs:
+        description: 'حداکثر تعداد کل کانفیگ‌ها (0 = نامحدود)'
+        required: false
+        default: 300
+        type: number
+      live_test:
+        description: 'تست زنده بودن کانفیگ‌ها؟'
+        required: false
+        default: false
+        type: boolean
+      commit_changes:
+        description: 'ذخیره تغییرات در ریپو؟'
+        required: false
+        default: true
+        type: boolean
+      verbose:
+        description: 'لاگ کامل؟'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # برای push کردن تغییرات
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run collector
+        env:
+          MODE: ${{ inputs.mode || 'collect' }}
+          TEMP_CHANNEL: ${{ inputs.temp_channel || '' }}
+          TEMP_LIMIT: ${{ inputs.temp_limit || 5 }}
+          GLOBAL_LIMIT_OVERRIDE: ${{ inputs.global_limit_override || 0 }}
+          PROTOCOL_FILTER: ${{ inputs.protocol_filter || '' }}
+          MAX_TOTAL_CONFIGS: ${{ inputs.max_total_configs || 0 }}
+          LIVE_TEST: ${{ inputs.live_test || false }}
+          VERBOSE: ${{ inputs.verbose || false }}
+          COMMIT_CHANGES: ${{ inputs.commit_changes || true }}
+        run: python collector.py
+
+      - name: Commit and push changes
+        if: env.COMMIT_CHANGES == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --quiet && git diff --staged --quiet || (git commit -m "🔄 Update subscriptions" && git push)
