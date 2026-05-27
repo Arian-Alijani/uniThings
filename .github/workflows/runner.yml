@@ -2,7 +2,7 @@ name: Collect V2Ray Configs
 
 on:
   schedule:
-    - cron: '0 * * * *'   # هر ساعت یکبار
+    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -58,7 +58,19 @@ jobs:
   collect:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # برای push کردن تغییرات
+      contents: write
+
+    # 👇 env در سطح job تعریف می‌شود تا در تمام مراحل در دسترس باشد
+    env:
+      MODE: ${{ inputs.mode || 'collect' }}
+      TEMP_CHANNEL: ${{ inputs.temp_channel || '' }}
+      TEMP_LIMIT: ${{ inputs.temp_limit || 5 }}
+      GLOBAL_LIMIT_OVERRIDE: ${{ inputs.global_limit_override || 0 }}
+      PROTOCOL_FILTER: ${{ inputs.protocol_filter || '' }}
+      MAX_TOTAL_CONFIGS: ${{ inputs.max_total_configs || 0 }}
+      LIVE_TEST: ${{ inputs.live_test || false }}
+      VERBOSE: ${{ inputs.verbose || false }}
+      COMMIT_CHANGES: ${{ inputs.commit_changes || true }}
 
     steps:
       - name: Checkout repository
@@ -73,16 +85,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run collector
-        env:
-          MODE: ${{ inputs.mode || 'collect' }}
-          TEMP_CHANNEL: ${{ inputs.temp_channel || '' }}
-          TEMP_LIMIT: ${{ inputs.temp_limit || 5 }}
-          GLOBAL_LIMIT_OVERRIDE: ${{ inputs.global_limit_override || 0 }}
-          PROTOCOL_FILTER: ${{ inputs.protocol_filter || '' }}
-          MAX_TOTAL_CONFIGS: ${{ inputs.max_total_configs || 0 }}
-          LIVE_TEST: ${{ inputs.live_test || false }}
-          VERBOSE: ${{ inputs.verbose || false }}
-          COMMIT_CHANGES: ${{ inputs.commit_changes || true }}
         run: python collector.py
 
       - name: Commit and push changes
