@@ -39,24 +39,32 @@ def save_json(filepath, data):
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-# الگوهای تشخیص کانفیگ
-CONFIG_PATTERNS = [
-    r'(vmess://[A-Za-z0-9+/_\-]+={0,2})',
-    r'(vless://[A-Za-z0-9+/_\-]+={0,2})',
-    r'(trojan://[A-Za-z0-9+/_\-]+={0,2})',
-    r'(ss://[A-Za-z0-9+/_\-]+={0,2})',
-    r'(hysteria2?://[A-Za-z0-9+/_\-]+={0,2})',
-    r'(tuic://[A-Za-z0-9+/_\-]+={0,2})',
+# ========== استخراج هوشمند کانفیگ ==========
+# پیشوندهای پشتیبانی‌شده
+KNOWN_PROTOCOLS = [
+    "vmess://", "vless://", "trojan://", "ss://",
+    "hysteria://", "hysteria2://", "tuic://"
 ]
 
 def extract_configs(text):
+    """
+    همهٔ کانفیگ‌های معتبر را از متن بیرون می‌کشد.
+    روش کار: جدا کردن بر اساس فضای خالی (whitespace)
+    و سپس تشخیص کلماتی که با یکی از پروتکل‌ها شروع می‌شوند.
+    """
     configs = set()
-    for pattern in CONFIG_PATTERNS:
-        matches = re.findall(pattern, text, re.IGNORECASE)
-        for m in matches:
-            clean = m.strip().rstrip('"').rstrip("'").rstrip('>')
-            if clean:
-                configs.add(clean)
+    # جدا کردن بر اساس هر نوع فضای خالی (فاصله، تب، خط جدید)
+    tokens = text.split()
+    for token in tokens:
+        token_lower = token.lower()
+        for prefix in KNOWN_PROTOCOLS:
+            if token_lower.startswith(prefix):
+                # پاکسازی علائم نگارشی چسبیده به انتها
+                # (مثلاً لینکی که در پرانتز یا گیومه قرار گرفته)
+                clean = token.rstrip('.,;:!?؟،؛"\'()[]{}<>')
+                if clean:
+                    configs.add(clean)
+                break  # یک توکن نمی‌تواند دو پروتکل داشته باشد
     return list(configs)
 
 def fetch_channel_posts(username):
