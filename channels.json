@@ -1,0 +1,5 @@
+[
+  { "username": "MyV2RayChannel1", "limit": 5 },
+  { "username": "free_v2ray_configs", "limit": 10 },
+  { "username": "another_channel", "limit": 3 }
+]
