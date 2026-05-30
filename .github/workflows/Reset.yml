@@ -20,18 +20,55 @@ jobs:
       - name: Verify confirmation
         run: |
           if [ "${{ inputs.confirm }}" != "yes" ]; then
-            echo "Confirmation missing or incorrect. No changes made."
+            echo "❌ Confirmation missing or incorrect. No changes made."
             exit 1
           fi
+          echo "✅ Confirmation verified."
 
-      - name: Delete collected data
+      - name: Remove collected data
         run: |
-          rm -f collected.json subscription.txt
-          rm -rf scans/
+          echo "🗑️ Removing files..."
+          # Use git rm to untrack and delete files safely
+          if [ -f "collected.json" ]; then
+            git rm --cached collected.json 2>/dev/null || true
+            rm -f collected.json
+          fi
+          if [ -f "subscription.txt" ]; then
+            git rm --cached subscription.txt 2>/dev/null || true
+            rm -f subscription.txt
+          fi
+          if [ -d "scans" ]; then
+            git rm --cached -r scans/ 2>/dev/null || true
+            rm -rf scans/
+          fi
+          echo "✅ Files removed."
 
-      - name: Commit and push
+      - name: Stage all changes
+        run: git add -A
+
+      - name: Commit and push if changes exist
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --quiet && git diff --staged --quiet || (git commit -m "🧹 Full reset" && git push)
+          if git diff --quiet --cached; then
+            echo "📭 No changes to commit. Everything already clean."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git commit -m "🧹 Full reset – remove all collected configs"
+            git push
+            echo "🚀 Changes pushed successfully."
+            echo "⏳ Note: GitHub raw URLs may cache for a few seconds."
+            echo "   Add ?v=$(date +%s) to the URL to force refresh."
+          fi
+
+      - name: Verify deletion via raw URL
+        run: |
+          sleep 3   # wait for GitHub CDN
+          URL="https://raw.githubusercontent.com/${{ github.repository }}/main/subscription.txt"
+          # Fetch with cache buster
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "${URL}?v=$(date +%s)")
+          if [ "$RESPONSE" = "404" ]; then
+            echo "✅ subscription.txt successfully deleted (HTTP 404)."
+          else
+            echo "⚠️ subscription.txt still returns HTTP $RESPONSE. Might be cached."
+            echo "   Please manually check: ${URL}?nocache=$(date +%s)"
+          fi
