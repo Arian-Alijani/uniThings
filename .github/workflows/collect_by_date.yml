@@ -1,230 +1,64 @@
-#!/usr/bin/env python3
-"""
-Date-Based Config Collector – نسخه نهایی بدون باگ
-- مدیریت پست‌های سنجاق‌شده
-- بازه‌ی تقویمی دقیق
-- استفاده از channels.json (نادیده گرفتن limit)
-- خروجی تمیز با لاگ کامل
-"""
+name: Collect Configs by Date
 
-import os
-import sys
-import json
-import re
-import base64
-import logging
-from datetime import datetime, timedelta, timezone
-from typing import List, Set, Optional, Dict
+on:
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: 'Number of days back to scan (3 = today + last 2 days)'
+        required: false
+        default: '3'
+        type: number
+      channels:
+        description: 'Override channels (comma separated). Leave empty to use channels.json'
+        required: false
+        default: ''
+        type: string
+      output_filename:
+        description: 'Output file name (default: date_subscription.txt)'
+        required: false
+        default: 'date_subscription'
+        type: string
+      commit_changes:
+        description: 'Commit and push changes?'
+        required: false
+        default: true
+        type: boolean
 
-import requests
-from bs4 import BeautifulSoup
+jobs:
+  collect-by-date:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      INPUT_DAYS_BACK: ${{ inputs.days_back }}
+      INPUT_CHANNELS: ${{ inputs.channels }}
+      INPUT_OUTPUT_FILENAME: ${{ inputs.output_filename }}
+      INPUT_COMMIT_CHANGES: ${{ inputs.commit_changes }}
 
-# ---------- File paths ----------
-CHANNELS_FILE = "channels.json"
-DATE_CONFIG_FILE = "date_filter_config.json"
-DEFAULT_OUTPUT_FILE = "date_subscription.txt"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-# ---------- Logging ----------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger(__name__)
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-# ---------- Config extraction ----------
-PROTOCOL_PATTERN = re.compile(
-    r'(vmess://\S+|vless://\S+|trojan://\S+|ss://\S+|hysteria2?://\S+|tuic://\S+)',
-    re.IGNORECASE,
-)
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-def extract_configs(text: str) -> List[str]:
-    configs = []
-    matches = PROTOCOL_PATTERN.findall(text)
-    for match in matches:
-        clean = match.rstrip('.,;:!?؟،؛"\'()[]{}<>')
-        if clean:
-            configs.append(clean)
-    return configs
+      - name: Run date-based collector
+        run: python collect_by_date.py
 
-# ---------- Telegram scraper with pinned handling ----------
-def fetch_messages_in_date_range(username: str, start_date: datetime, end_date: datetime) -> List[Dict]:
-    base_url = f"https://t.me/s/{username}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    messages = []
-    page_url = base_url
-    page_count = 0
-    pinned_skipped = 0
-
-    log.info(f"Scanning @{username} from {start_date.isoformat()} to {end_date.isoformat()}")
-
-    while True:
-        page_count += 1
-        try:
-            resp = requests.get(page_url, headers=headers, timeout=15)
-            resp.raise_for_status()
-        except Exception as e:
-            log.error(f"Error fetching page {page_count} ({page_url}): {e}")
-            break
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-        msg_wraps = soup.select(".tgme_widget_message_wrap")
-        if not msg_wraps:
-            log.info(f"Page {page_count}: no messages found. Stopping.")
-            break
-
-        page_oldest_nonpinned_date = None
-        page_has_nonpinned = False
-
-        for wrap in msg_wraps:
-            # Check if message is pinned
-            is_pinned = wrap.select_one(".tgme_widget_message_pinned") is not None
-
-            time_tag = wrap.select_one("time")
-            if not time_tag or not time_tag.has_attr("datetime"):
-                continue
-
-            msg_dt_str = time_tag["datetime"]
-            try:
-                msg_dt = datetime.fromisoformat(msg_dt_str)
-                if msg_dt.tzinfo is None:
-                    msg_dt = msg_dt.replace(tzinfo=timezone.utc)
-                else:
-                    msg_dt = msg_dt.astimezone(timezone.utc)
-            except Exception as e:
-                log.warning(f"Failed to parse datetime {msg_dt_str}: {e}")
-                continue
-
-            # Process text extraction for all messages (pinned included)
-            text_div = wrap.select_one(".tgme_widget_message_text")
-            if text_div:
-                text = text_div.get_text(separator="\n")
-                if start_date <= msg_dt <= end_date:
-                    messages.append({"datetime": msg_dt, "text": text})
-                    if is_pinned:
-                        log.debug(f"  📌 Pinned message from {msg_dt.isoformat()} included.")
-                else:
-                    # Message is outside our range (too old or too new)
-                    pass
-
-            # For pagination logic, ignore pinned messages
-            if is_pinned:
-                pinned_skipped += 1
-                continue
-
-            page_has_nonpinned = True
-            # Track oldest non-pinned message on this page
-            if page_oldest_nonpinned_date is None or msg_dt < page_oldest_nonpinned_date:
-                page_oldest_nonpinned_date = msg_dt
-
-        # Decide whether to continue pagination
-        if not page_has_nonpinned:
-            # All messages on page are pinned, continue to next page
-            log.debug(f"Page {page_count}: only pinned messages, continuing.")
-        else:
-            # If the oldest non-pinned message is still newer than start_date, we need more pages
-            # If it's older than start_date, we've gone far enough
-            if page_oldest_nonpinned_date < start_date:
-                log.info(f"Page {page_count}: oldest non-pinned message ({page_oldest_nonpinned_date.isoformat()}) is older than start date. Pagination complete.")
-                break
-            else:
-                log.debug(f"Page {page_count}: oldest non-pinned message ({page_oldest_nonpinned_date.isoformat()}) is within range, loading next page.")
-
-        # Get next page
-        last_msg = msg_wraps[-1]
-        before_attr = last_msg.get("data-before")
-        if before_attr:
-            page_url = f"{base_url}?before={before_attr}"
-        else:
-            log.info("No 'before' parameter, reached end of history.")
-            break
-
-    log.info(f"@{username}: scanned {page_count} page(s), collected {len(messages)} messages, skipped {pinned_skipped} pinned messages for pagination.")
-    return messages
-
-# ---------- Main ----------
-def main():
-    # 1. Days back
-    days_back = 3
-    if os.getenv("INPUT_DAYS_BACK"):
-        days_back = int(os.getenv("INPUT_DAYS_BACK"))
-    elif os.path.exists(DATE_CONFIG_FILE):
-        try:
-            with open(DATE_CONFIG_FILE, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            days_back = int(cfg.get("days_back", days_back))
-        except Exception as e:
-            log.warning(f"Could not read {DATE_CONFIG_FILE}: {e}")
-
-    # 2. Channels
-    channels_usernames = []
-    env_channels = os.getenv("INPUT_CHANNELS", "").strip()
-    if env_channels:
-        channels_usernames = [ch.strip() for ch in env_channels.split(",") if ch.strip()]
-        log.info(f"Using channels from workflow input: {channels_usernames}")
-    else:
-        if not os.path.exists(CHANNELS_FILE):
-            log.error(f"{CHANNELS_FILE} not found. Exiting.")
-            sys.exit(1)
-        try:
-            with open(CHANNELS_FILE, "r", encoding="utf-8") as f:
-                channels_data = json.load(f)
-            channels_usernames = [ch["username"] for ch in channels_data if "username" in ch]
-            log.info(f"Loaded {len(channels_usernames)} channels from {CHANNELS_FILE}")
-        except Exception as e:
-            log.error(f"Failed to parse {CHANNELS_FILE}: {e}")
-            sys.exit(1)
-
-    # Remove duplicates
-    channels_usernames = list(dict.fromkeys(channels_usernames))  # preserves order, removes duplicates
-    if not channels_usernames:
-        log.error("No channels to scan. Exiting.")
-        sys.exit(1)
-
-    output_filename = os.getenv("INPUT_OUTPUT_FILENAME", DEFAULT_OUTPUT_FILE)
-
-    # 3. Date range: full calendar days
-    now_utc = datetime.now(timezone.utc)
-    # start_date = midnight of the earliest day
-    earliest_day = now_utc - timedelta(days=days_back - 1)
-    start_date = earliest_day.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_date = now_utc  # up to this exact moment
-    log.info(f"Collecting configs from {start_date.isoformat()} to {end_date.isoformat()} (last {days_back} calendar days)")
-
-    # 4. Collect
-    all_configs: Set[str] = set()
-    total_messages = 0
-    for channel in channels_usernames:
-        messages = fetch_messages_in_date_range(channel, start_date, end_date)
-        total_messages += len(messages)
-        channel_config_count = 0
-        for msg in messages:
-            cfgs = extract_configs(msg["text"])
-            if cfgs:
-                log.debug(f"  📩 {msg['datetime'].strftime('%Y-%m-%d %H:%M')} – {len(cfgs)} config(s)")
-                all_configs.update(cfgs)
-                channel_config_count += len(cfgs)
-        log.info(f"  ➡️ @{channel}: {channel_config_count} configs added (running unique total: {len(all_configs)})")
-
-    log.info(f"Total messages processed: {total_messages}, unique configs: {len(all_configs)}")
-
-    # 5. Write output
-    if all_configs:
-        plain = "\n".join(sorted(all_configs))
-        b64 = base64.b64encode(plain.encode()).decode()
-        with open(output_filename, "w", encoding="utf-8") as f:
-            f.write(b64)
-        log.info(f"✅ Written {len(all_configs)} unique configs to {output_filename}")
-    else:
-        with open(output_filename, "w", encoding="utf-8") as f:
-            f.write("")
-        log.warning("❌ No configs found. Output file cleared.")
-
-    # 6. Print raw link
-    repo = os.getenv("GITHUB_REPOSITORY", "user/repo")
-    branch = os.getenv("GITHUB_REF_NAME", "main")
-    raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{output_filename}"
-    log.info(f"🔗 Subscription link (after commit): {raw_url}")
-
-if __name__ == "__main__":
-    main()
+      - name: Commit and push changes
+        if: env.INPUT_COMMIT_CHANGES == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --quiet --cached; then
+            echo "No changes to commit."
+          else
+            git commit -m "📅 Update date-filtered subscription (${{ inputs.days_back }} days)"
+            git push
+          fi
