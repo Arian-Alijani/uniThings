@@ -1,0 +1,64 @@
+name: Collect Configs by Date
+
+on:
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: 'Number of days back to scan (3 = today + last 2 days)'
+        required: false
+        default: '3'
+        type: number
+      channels:
+        description: 'Override channels (comma separated). Leave empty to use channels.json'
+        required: false
+        default: ''
+        type: string
+      output_filename:
+        description: 'Output file name (default: date_subscription.txt)'
+        required: false
+        default: 'date_subscription'
+        type: string
+      commit_changes:
+        description: 'Commit and push changes?'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  collect-by-date:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      INPUT_DAYS_BACK: ${{ inputs.days_back }}
+      INPUT_CHANNELS: ${{ inputs.channels }}
+      INPUT_OUTPUT_FILENAME: ${{ inputs.output_filename }}
+      INPUT_COMMIT_CHANGES: ${{ inputs.commit_changes }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run date-based collector
+        run: python collect_by_date.py
+
+      - name: Commit and push changes
+        if: env.INPUT_COMMIT_CHANGES == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --quiet --cached; then
+            echo "No changes to commit."
+          else
+            git commit -m "📅 Update date-filtered subscription (${{ inputs.days_back }} days)"
+            git push
+          fi
